@@ -2,7 +2,7 @@
 // L32-eval.ts
 
 import { map } from "ramda";
-import { isCExp, isLetExp, isDictExp, DictExp } from "./L32-ast";
+import { isCExp, isLetExp, isDictExp } from "./L32-ast";
 import {
     BoolExp, CExp, Exp, IfExp, LitExp, NumExp, PrimOp, ProcExp, Program,
     StrExp, VarDecl, isAppExp, isBoolExp, isDefineExp, isIfExp, isLitExp,
@@ -13,15 +13,19 @@ import {
 } from "./L32-ast";
 import { parseL32Exp } from "./L32-ast";
 import { applyEnv, makeEmptyEnv, makeEnv, Env } from "./L32-env";
-import { isClosure, makeClosure, Closure, Value, makeDictValue, isDictValue } from "./L32-value";
+import {
+    isClosure, makeClosure, Closure, Value,
+    makeDictValue, isDictValue, isSymbolSExp
+} from "./L32-value";
 import { first, rest, isEmpty, List, isNonEmptyList } from '../shared/list';
 import { isBoolean, isNumber, isString } from "../shared/type-predicates";
-import { Result, makeOk, makeFailure, bind, mapResult, mapv } from "../shared/result";
+import { Result, makeOk, makeFailure, bind, mapResult } from "../shared/result";
 import { renameExps, substitute } from "./substitute";
 import { applyPrimitive } from "./evalPrimitive";
 import { parse as p } from "../shared/parser";
 import { Sexp } from "s-expression";
 import { format } from "../shared/format";
+
 
 // ========================================================
 // Eval functions
@@ -39,16 +43,14 @@ const L32applicativeEval = (exp: CExp, env: Env): Result<Value> =>
                         bind(mapResult(param => L32applicativeEval(param, env), exp.rands), (rands: Value[]) =>
                             L32applyProcedure(rator, rands, env))) :
     isLetExp(exp) ? makeFailure('"let" not supported (yet)') :
-    isDictExp(exp) ? (
-        bind(
-            mapResult(
-                (pair) => bind(L32applicativeEval(pair.val, env), (v: Value) =>
-                    makeOk([pair.key, v] as [string, Value])
-                ),
-                exp.pairs
+    isDictExp(exp) ? bind(
+        mapResult(
+            pair => bind(L32applicativeEval(pair.val, env), (v: Value) =>
+                makeOk([pair.key, v] as [string, Value])
             ),
-            (entries: [string, Value][]) => makeOk(makeDictValue(Object.fromEntries(entries)))
-        )
+            exp.pairs
+        ),
+        (entries: [string, Value][]) => makeOk(makeDictValue(Object.fromEntries(entries)))
     ) :
     makeFailure(`Unknown expression type: ${format(exp)}`);
 
@@ -66,28 +68,23 @@ const evalProc = (exp: ProcExp, env: Env): Result<Closure> =>
 const L32applyProcedure = (proc: Value, args: Value[], env: Env): Result<Value> =>
     isPrimOp(proc) ? applyPrimitive(proc, args) :
     isClosure(proc) ? applyClosure(proc, args, env) :
-    isDictValue(proc) ?
-        (args.length === 1 && typeof args[0] === "object" && "val" in args[0]) ?
-            (proc.map[args[0].val] !== undefined ?
-                makeOk(proc.map[args[0].val]) :
-                makeFailure(`Key '${args[0].val}' not found`)) :
-            makeFailure("Dict access requires a symbol key") :
-    makeFailure(`Bad procedure ${format(proc)}`);
+    isDictValue(proc)
+        ? (args.length === 1 && isSymbolSExp(args[0]))
+            ? (proc.map[args[0].val] !== undefined
+                ? makeOk(proc.map[args[0].val])
+                : makeFailure(`Key '${args[0].val}' not found`))
+            : makeFailure("Dict access requires a symbol key")
+        : makeFailure(`Bad procedure ${format(proc)}`);
 
-    const valueToLitExp = (v: Value): NumExp | BoolExp | StrExp | LitExp | PrimOp | ProcExp => {
-        if (isNumber(v)) return makeNumExp(v);
-        if (isBoolean(v)) return makeBoolExp(v);
-        if (isString(v)) return makeStrExp(v);
-        if (isPrimOp(v)) return v;
-        if (isClosure(v)) return makeProcExp(v.params, v.body);
-    
-        // טיפול במקרה השגוי:
-        if (isDictValue(v)) {
-            throw new Error("Cannot quote a dictionary value");
-        }
-    
-        return makeLitExp(v);
-    };
+const valueToLitExp = (v: Value): NumExp | BoolExp | StrExp | LitExp | PrimOp | ProcExp => {
+    if (isNumber(v)) return makeNumExp(v);
+    if (isBoolean(v)) return makeBoolExp(v);
+    if (isString(v)) return makeStrExp(v);
+    if (isPrimOp(v)) return v;
+    if (isClosure(v)) return makeProcExp(v.params, v.body);
+    if (isDictValue(v)) throw new Error("Cannot quote a dictionary value");
+    return makeLitExp(v);
+};
 
 const applyClosure = (proc: Closure, args: Value[], env: Env): Result<Value> => {
     const vars = map((v: VarDecl) => v.var, proc.params);
@@ -96,25 +93,45 @@ const applyClosure = (proc: Closure, args: Value[], env: Env): Result<Value> => 
     return evalSequence(substitute(body, vars, litArgs), env);
 };
 
-export const evalSequence = (seq: List<Exp>, env: Env): Result<Value> =>
-    isNonEmptyList<Exp>(seq) ? 
-        isDefineExp(first(seq)) ? evalDefineExps(first(seq), rest(seq), env) :
-        evalCExps(first(seq), rest(seq), env) :
-    makeFailure("Empty sequence");
+export const evalSequence = (seq: List<Exp>, env: Env): Result<Value> => {
+    if (!isNonEmptyList<Exp>(seq)) {
+        return makeFailure("Empty sequence");
+    }
+
+    const firstExp = first(seq);    // seq כבר NonEmptyList<Exp>
+    const restExps = rest(seq);     // לכן גם אלו בטוחים טיפוסית
+
+    return isDefineExp(firstExp)
+        ? evalDefineExps(firstExp, restExps, env)
+        : evalCExps(firstExp, restExps, env);
+};
 
 const evalCExps = (first: Exp, rest: Exp[], env: Env): Result<Value> =>
-    isCExp(first) && isEmpty(rest) ? L32applicativeEval(first, env) :
-    isCExp(first) ? bind(L32applicativeEval(first, env), _ => 
-                            evalSequence(rest, env)) :
-    makeFailure("Never");
+    isCExp(first) && isEmpty(rest)
+        ? L32applicativeEval(first, env)
+        : isCExp(first)
+            ? bind(L32applicativeEval(first, env), _ =>
+                evalSequence(rest, env))
+            : makeFailure("Unexpected expression");
 
 const evalDefineExps = (def: Exp, exps: Exp[], env: Env): Result<Value> =>
-    isDefineExp(def) ? bind(L32applicativeEval(def.val, env), (rhs: Value) => 
-                                evalSequence(exps, makeEnv(def.var.var, rhs, env))) :
-    makeFailure(`Unexpected in evalDefine: ${format(def)}`);
+    isDefineExp(def)
+        ? bind(L32applicativeEval(def.val, env), (rhs: Value) =>
+            evalSequence(exps, makeEnv(def.var.var, rhs, env)))
+        : makeFailure(`Unexpected in evalDefine: ${format(def)}`);
 
+const makePrimEnv = (): Env => {
+            const primNames = ["dict", "get", "bind", "dict?", "is-error?"];
+            const primVals = primNames.map((name): PrimOp => ({ tag: "PrimOp", op: name }));
+            
+            return primNames.reduceRight<Env>(
+                (acc, name, i) => makeEnv(name, primVals[i], acc),
+                makeEmptyEnv()
+            );
+        };
+        
 export const evalL32program = (program: Program): Result<Value> =>
-    evalSequence(program.exps, makeEmptyEnv());
+            evalSequence(program.exps, makePrimEnv());
 
 export const evalParse = (s: string): Result<Value> =>
     bind(p(s), (sexp: Sexp) => 

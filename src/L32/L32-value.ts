@@ -54,14 +54,16 @@ export type SExpValue =
     | CompoundSExp;
 
 export const isSExp = (x: any): x is SExpValue =>
-    typeof x === 'string' ||
-    typeof x === 'boolean' ||
-    typeof x === 'number' ||
-    isSymbolSExp(x) ||
-    isCompoundSExp(x) ||
-    isEmptySExp(x) ||
-    isPrimOp(x) ||
-    isClosure(x);
+        typeof x === 'string' ||
+        typeof x === 'boolean' ||
+        typeof x === 'number' ||
+        isSymbolSExp(x) ||
+        isCompoundSExp(x) ||
+        isEmptySExp(x) ||
+        isPrimOp(x) ||
+        isClosure(x);
+    
+export const isSExpValue = isSExp;  // ✔ זה מוסיף תמיכה בשם שהטסטים מחפשים
 
 export const makeCompoundSExp = (val1: SExpValue, val2: SExpValue): CompoundSExp =>
     ({ tag: "CompoundSexp", val1, val2 });
