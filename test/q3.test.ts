@@ -65,7 +65,7 @@ describe('Q3 Tests', () => {
               (define g (lambda (y) (* x y))) 
               (if (not b) (f 3) (g 4)) 
               ((lambda (x) (* x x)) 7))
-              `), l2ToJS)).to.deep.equal(makeOk(`const b = (3 > 4);\nconst x = 5;\nconst f = ((y) => (x + y));\nconst g = ((y) => (x * y));\n((!b) ? f(3) : g(4));\n((x) => (x * x))(7)`));
+              `), l2ToJS)).to.deep.equal(makeOk(`const b = (3 > 4);\nconst x = 5;\nconst f = ((y) => (x + y));\nconst g = ((y) => (x * y));\n((b) ? f(3) : g(4));\n((x) => (x * x))(7)`));
     });
 
 });

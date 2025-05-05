@@ -207,7 +207,8 @@ export const parseL3Atomic = (token: Token): Result<CExp> =>
 const isPrimitiveOp = (x: string): boolean =>
     ["+", "-", "*", "/", ">", "<", "=", "not", "and", "or",
      "eq?", "string=?", "cons", "car", "cdr", "list", "pair?",
-     "number?", "boolean?", "symbol?", "string?"].includes(x);
+     "number?", "boolean?", "symbol?", "string?", 
+     "get", "dict?", "is-error?", "bind", "dict"].includes(x);
 
 
 const isSpecialForm = (x: string): boolean =>
