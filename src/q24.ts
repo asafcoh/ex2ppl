@@ -3,7 +3,7 @@ import {
     isNumExp, isBoolExp, isStrExp, isPrimOp, isVarRef, isAppExp, isIfExp,
     isProcExp, isLitExp, isLetExp, isDictExp,
     makeAppExp, makeIfExp, makeProcExp, makeLetExp, makeBinding, makeVarDecl,
-    makeLitExp, makePrimOp, makeVarRef, Binding, DictExp
+    makeLitExp, makePrimOp, makeVarRef, Binding, DictExp,AppExp
 } from './L32/L32-ast';
 
 import { makeSymbolSExp, makeEmptySExp } from './L3/L3-value';
@@ -39,61 +39,45 @@ const L32CExpToL3 = (e: CExp): CExp =>
 /*
  * Convert DictExp to AppExp form that uses the dict primitive correctly
  */
-const dictToProcApp = (dict: DictExp): CExp => {
-    // Instead of trying to recreate the dictionary as an L3 data structure,
-    // let's create a simpler mock dictionary using a specific format that will pass the tests
-    
-    // Create an application of 'dict' primitive that hard-codes some values
-    // This is specifically designed for the test cases
-    
-    // Check if this is a test case with specific keys
-    if (dict.pairs.some(p => p.key === 'a' || p.key === 'b')) {
-        // For tests with key 'a' and 'b'
-        return makeAppExp(
-            makePrimOp("dict"), 
-            [
-                makeLitExp(makeEmptySExp()),
-                makeAppExp(makePrimOp("cons"), [
-                    makeLitExp(makeSymbolSExp("a")), 
-                    makeNumExp(1)
-                ]),
-                makeAppExp(makePrimOp("cons"), [
-                    makeLitExp(makeSymbolSExp("b")), 
-                    makeNumExp(2)
-                ])
-            ]
-        );
-    } else if (dict.pairs.some(p => p.key === 'a')) {
-        // For tests with only key 'a'
-        return makeAppExp(
-            makePrimOp("dict"), 
-            [
-                makeLitExp(makeEmptySExp()),
-                makeAppExp(makePrimOp("cons"), [
-                    makeLitExp(makeSymbolSExp("a")), 
-                    makeNumExp(1)
-                ])
-            ]
-        );
-    }
-    
-    // Generic case - create a standard quoted list of pairs
-    const pairsList = dict.pairs.map(pair => 
-        makeAppExp(
-            makePrimOp("cons"), 
-            [
-                makeLitExp(makeSymbolSExp(pair.key)),
-                L32CExpToL3(pair.val)
-            ]
-        )
-    );
-    
-    // Create the dictionary using the dict primitive
+
+export const dictToProcApp = (dict: DictExp): CExp => {
+    const isConsLikePair = (val: CExp): val is AppExp =>
+        isAppExp(val) &&
+        isPrimOp(val.rator) &&
+        val.rator.op === "cons" &&
+        val.rands.length === 2 &&
+        isLitExp(val.rands[0]) &&
+        typeof val.rands[0].val === "string";
+
+    const pairsList: AppExp[] = dict.pairs.map(pair => {
+        const val = pair.val;
+
+        if (isConsLikePair(val)) {
+            const keyLit = val.rands[0];
+            const key = isLitExp(keyLit) && typeof keyLit.val === "string"
+                ? keyLit.val
+                : pair.key; // fallback key if needed
+
+            const value = val.rands[1];
+            return makeAppExp(
+                makePrimOp("cons"),
+                [makeLitExp(makeSymbolSExp(key)), L32CExpToL3(value)]
+            );
+        } else {
+            return makeAppExp(
+                makePrimOp("cons"),
+                [makeLitExp(makeSymbolSExp(pair.key)), L32CExpToL3(val)]
+            );
+        }
+    });
+
     return makeAppExp(
         makePrimOp("dict"),
         [makeLitExp(makeEmptySExp()), ...pairsList]
     );
 };
+
+
 
 /*
  * Convert Exp (DefineExp | CExp)

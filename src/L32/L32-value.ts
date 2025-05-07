@@ -85,7 +85,11 @@ export const makeDictValue = (map: { [key: string]: Value }): DictValue =>
     ({ tag: "DictValue", map });
 
 export const isDictValue = (val: any): val is DictValue =>
-    val !== null && typeof val === "object" && val.tag === "DictValue";
+    val !== null &&
+    typeof val === "object" &&
+    val.tag === "DictValue" &&
+    typeof val.map === "object" &&
+    val.map !== null;
 
 // ===========================================
 // Printable form for values

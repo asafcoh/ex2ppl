@@ -18,6 +18,8 @@ import { List, allT, first, isNonEmptyList, rest } from '../shared/list';
 import { isBoolean, isNumber, isString } from "../shared/type-predicates";
 import { Result, makeOk, makeFailure } from "../shared/result";
 import { format } from "../shared/format";
+import { bindPrim } from "./L32-eval"; // ⬅️ ייבוא חשוב!
+
 
 
 export const applyPrimitive = (proc: PrimOp, args: Value[]): Result<Value> =>
@@ -48,27 +50,34 @@ export const applyPrimitive = (proc: PrimOp, args: Value[]): Result<Value> =>
     proc.op === "string?" ? makeOk(isString(args[0])) :
 
     // === תוספות עבור Q23/Q24 ===
-    proc.op === "dict" ? makeOk(makeDictValue({})) :
-    proc.op === "get" ?
-        args.length === 2 && isDictValue(args[0]) && isSymbolSExp(args[1])
-            ? args[0].map.hasOwnProperty(args[1].val)
-                ? makeOk(args[0].map[args[1].val])
-                : makeFailure(`Key '${args[1].val}' not found`)
-            : makeFailure("get expects a dict and a symbol") :
-    proc.op === "bind" ?
-        args.length === 3 && isDictValue(args[0]) && isSymbolSExp(args[1])
-            ? makeOk(makeDictValue({ ...args[0].map, [args[1].val]: args[2] }))
-            : makeFailure("bind expects a dict, symbol and value") :
-    proc.op === "dict?" ?
-        args.length === 1
-            ? makeOk(isDictValue(args[0]))
-            : makeFailure("dict? expects 1 argument") :
-    proc.op === "is-error?" ?
-        args.length === 1
-            ? makeOk((args[0] as any).tag === "Failure")
-            : makeFailure("is-error? expects 1 argument") :
+    proc.op === "dict" ? 
+    makeOk(makeDictValue({})) :
 
-    makeFailure(`Bad primitive op: ${format(proc.op)}`);
+    proc.op === "get" ?
+    args.length === 2 && isDictValue(args[0]) && isSymbolSExp(args[1])
+      ? args[0].map.hasOwnProperty(args[1].val)
+         ? makeOk(args[0].map[args[1].val])
+         : makeFailure(`Key '${args[1].val}' not found`)
+      : makeFailure("get expects a dict and a symbol") :
+
+   proc.op === "bind" ?
+   args.length === 2
+    ? bindPrim(args) // ✅ bind של Result ו-lambda
+    : args.length === 3 && isDictValue(args[0]) && isSymbolSExp(args[1])
+        ? makeOk(makeDictValue({ ...args[0].map, [args[1].val]: args[2] }))
+        : makeFailure("bind expects either (Result, lambda) or (dict, symbol, value)") :
+
+    proc.op === "dict?" ?
+    args.length === 1
+        ? makeOk(isDictValue(args[0]))
+        : makeFailure("dict? expects 1 argument") :
+
+    proc.op === "is-error?" ?
+    args.length === 1
+        ? makeOk((args[0] as any)?.tag === "Failure")
+        : makeFailure("is-error? expects 1 argument") :
+
+makeFailure(`Bad primitive op: ${format(proc.op)}`);
 
 
 const minusPrim = (args: Value[]): Result<number> => {
