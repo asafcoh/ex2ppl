@@ -1,17 +1,104 @@
+// Abstract Syntax Tree (AST)
 import {
-    Program, Exp, CExp, isDefineExp, isCExp, makeProgram, makeDefineExp,
-    isNumExp, isBoolExp, isStrExp, isPrimOp, isVarRef, isAppExp, isIfExp,
-    isProcExp, isLitExp, isLetExp, isDictExp,
-    makeAppExp, makeIfExp, makeProcExp, makeLetExp, makeBinding, makeVarDecl,
-    makeLitExp, makePrimOp, makeVarRef, Binding, DictExp,AppExp
+    Program, Exp, CExp, Binding, DictExp,
+    isDefineExp, isCExp, isNumExp, isBoolExp, isStrExp, isPrimOp,
+    isVarRef, isAppExp, isIfExp, isProcExp, isLitExp, isLetExp, isDictExp,
+    makeProgram, makeDefineExp, makeAppExp, makeIfExp,
+    makeProcExp, makeLetExp, makeBinding, makeVarDecl,
+    makeLitExp, makeVarRef
 } from './L32/L32-ast';
 
-import { makeSymbolSExp, makeEmptySExp } from './L3/L3-value';
-import { makeBoolExp, makeNumExp } from './L32/L32-ast';
+// S-Expression Values
+import {
+    isEmptySExp, isCompoundSExp, isSymbolSExp,
+    makeEmptySExp, makeCompoundSExp, makeSymbolSExp,SExpValue
+} from "./L3/L3-value";
+
 import { map } from 'ramda';
 
 /*
- * Convert a single CExp from L32 to L3
+ * === Part A ===
+ * Dict2App: convert only DictExp → AppExp(dict '((a . v1) ...))
+ */
+export const Dict2App = (exp: CExp): CExp =>
+    isDictExp(exp) ? dictToApp(exp) :
+    isIfExp(exp) ? makeIfExp(Dict2App(exp.test), Dict2App(exp.then), Dict2App(exp.alt)) :
+    isAppExp(exp) ? makeAppExp(Dict2App(exp.rator), map(Dict2App, exp.rands)) :
+    isProcExp(exp) ? makeProcExp(exp.args, map(Dict2App, exp.body)) :
+    isLetExp(exp) ? makeLetExp(
+        map((b: Binding) => makeBinding(b.var.var, Dict2App(b.val)), exp.bindings),
+        map(Dict2App, exp.body)) :
+    exp;
+
+/*
+ * === Helper: convert CExp → SExpValue with quote wrapping ===
+ */
+const convertSExpValue = (val: any): SExpValue => {
+    if (typeof val === "number" || typeof val === "boolean" || typeof val === "string") {
+        return val;
+    }
+    if (isSymbolSExp(val)) return makeSymbolSExp(val.val);
+    if (isEmptySExp(val)) return makeEmptySExp();
+    if (isCompoundSExp(val)) {
+        return makeCompoundSExp(
+            convertSExpValue(val.val1),
+            convertSExpValue(val.val2)
+        );
+    }
+    // כאמצעי מנע – נחזיר סימבול של שגיאה
+    return makeSymbolSExp("unsupported");
+};
+
+const convertCExpToSExp = (e: CExp): SExpValue => {
+    if (isNumExp(e)) return e.val;
+    if (isBoolExp(e)) return e.val;
+    if (isStrExp(e)) return e.val;
+    if (isVarRef(e)) return makeSymbolSExp(e.var);
+    if (isPrimOp(e)) return makeSymbolSExp(e.op);
+    if (isLitExp(e)) return convertSExpValue(e.val);
+
+
+    if (isProcExp(e))
+        return makeCompoundSExp(
+            makeSymbolSExp("lambda"),
+            makeCompoundSExp(
+                makeListCompound(e.args.map(a => makeSymbolSExp(a.var))),
+                makeListCompound(e.body.map(convertCExpToSExp))
+            )
+        );
+
+    if (isAppExp(e))
+        return makeCompoundSExp(
+            convertCExpToSExp(e.rator),
+            makeListCompound(e.rands.map(convertCExpToSExp))
+        );
+
+    return makeSymbolSExp("unsupported");
+};
+
+const cexpToQuotedSExp = (cexp: CExp): SExpValue =>
+    makeCompoundSExp(makeSymbolSExp("quote"), convertCExpToSExp(cexp));
+
+const makeListCompound = (xs: SExpValue[]): SExpValue =>
+    xs.length === 0 ? makeEmptySExp() : makeCompoundSExp(xs[0], makeListCompound(xs.slice(1)));
+
+const dictToApp = (dict: DictExp): CExp => {
+    const pairList = dict.pairs.map(pair =>
+        makeCompoundSExp(
+            makeSymbolSExp(pair.key),   // keys must be symbols
+            cexpToQuotedSExp(pair.val)  // values must be quoted
+        )
+    );
+
+    return makeAppExp(
+        makeVarRef("dict"),
+        [makeLitExp(makeListCompound(pairList))]
+    );
+};
+
+/*
+ * === Part B ===
+ * L32toL3: converts full program, including dict access (get ...)
  */
 const L32CExpToL3 = (e: CExp): CExp =>
     isNumExp(e) ? e :
@@ -24,76 +111,21 @@ const L32CExpToL3 = (e: CExp): CExp =>
         L32CExpToL3(e.test),
         L32CExpToL3(e.then),
         L32CExpToL3(e.alt)) :
-    isAppExp(e) ? makeAppExp(
-        L32CExpToL3(e.rator),
-        map(L32CExpToL3, e.rands)) :
-    isProcExp(e) ? makeProcExp(
-        e.args,
-        map(L32CExpToL3, e.body)) :
+    isAppExp(e)
+        ? isDictExp(e.rator) && e.rands.length === 1
+            ? makeAppExp(makeVarRef("get"), [dictToApp(e.rator), L32CExpToL3(e.rands[0])])
+            : makeAppExp(L32CExpToL3(e.rator), map(L32CExpToL3, e.rands)) :
+    isProcExp(e) ? makeProcExp(e.args, map(L32CExpToL3, e.body)) :
     isLetExp(e) ? makeLetExp(
         map((b: Binding) => makeBinding(b.var.var, L32CExpToL3(b.val)), e.bindings),
         map(L32CExpToL3, e.body)) :
-    isDictExp(e) ? dictToProcApp(e) :
+    isDictExp(e) ? dictToApp(e) :
     e;
 
-/*
- * Convert DictExp to AppExp form that uses the dict primitive correctly
- */
-
-export const dictToProcApp = (dict: DictExp): CExp => {
-    const isConsLikePair = (val: CExp): val is AppExp =>
-        isAppExp(val) &&
-        isPrimOp(val.rator) &&
-        val.rator.op === "cons" &&
-        val.rands.length === 2 &&
-        isLitExp(val.rands[0]) &&
-        typeof val.rands[0].val === "string";
-
-    const pairsList: AppExp[] = dict.pairs.map(pair => {
-        const val = pair.val;
-
-        if (isConsLikePair(val)) {
-            const keyLit = val.rands[0];
-            const key = isLitExp(keyLit) && typeof keyLit.val === "string"
-                ? keyLit.val
-                : pair.key; // fallback key if needed
-
-            const value = val.rands[1];
-            return makeAppExp(
-                makePrimOp("cons"),
-                [makeLitExp(makeSymbolSExp(key)), L32CExpToL3(value)]
-            );
-        } else {
-            return makeAppExp(
-                makePrimOp("cons"),
-                [makeLitExp(makeSymbolSExp(pair.key)), L32CExpToL3(val)]
-            );
-        }
-    });
-
-    return makeAppExp(
-        makePrimOp("dict"),
-        [makeLitExp(makeEmptySExp()), ...pairsList]
-    );
-};
-
-
-
-/*
- * Convert Exp (DefineExp | CExp)
- */
 const L32ExpToL3 = (exp: Exp): Exp =>
     isDefineExp(exp) ? makeDefineExp(exp.var, L32CExpToL3(exp.val)) :
     isCExp(exp) ? L32CExpToL3(exp) :
     exp;
 
-/*
- * Transform entire program from L32 to L3
- */
 export const L32toL3 = (prog: Program): Program =>
     makeProgram(map(L32ExpToL3, prog.exps));
-
-/*
- * Alias for compatibility
- */
-export const Dict2App = L32toL3;
