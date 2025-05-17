@@ -12,14 +12,12 @@ import {
     Value,
     SExpValue,
     isSExpValue,
-    isDictValue
 } from "./L32-value";
 import { List, allT, first, isNonEmptyList, rest } from '../shared/list';
 import { isBoolean, isNumber, isString } from "../shared/type-predicates";
 import { Result, makeOk, makeFailure } from "../shared/result";
 import { format } from "../shared/format";
 import { DictValue, SymbolSExp } from "./L32-value";
-import { bindPrim, dictLookup } from "./L32-eval"; // ⬅️ ייבוא חשוב!
 
 
 
@@ -49,33 +47,6 @@ export const applyPrimitive = (proc: PrimOp, args: Value[]): Result<Value> =>
     proc.op === "boolean?" ? makeOk(typeof args[0] === 'boolean') :
     proc.op === "symbol?" ? makeOk(isSymbolSExp(args[0])) :
     proc.op === "string?" ? makeOk(isString(args[0])) :
-
-    // === תוספות עבור Q23/Q24 ===
-    proc.op === "dict" ? 
-    makeOk(makeDictValue(makeEmptySExp())) :
-
-    proc.op === "get" ?
-    args.length === 2 && isDictValue(args[0]) && isSymbolSExp(args[1])
-        ? dictLookup(args[0].pairs, args[1])
-        : makeFailure("get expects a dict and a symbol") :
-
-    proc.op === "bind" ?
-    args.length === 3 && isDictValue(args[0]) && isSymbolSExp(args[1])
-        ? dictBind(args[0], args[1], args[2])
-        : args.length === 2
-            ? bindPrim(args)
-            : makeFailure("bind expects either (Result, lambda) or (dict, symbol, value)") :
-
-    proc.op === "dict?" ?
-    args.length === 1
-        ? makeOk(isDictValue(args[0]))
-        : makeFailure("dict? expects 1 argument") :
-
-    proc.op === "is-error?" ?
-    args.length === 1
-        ? makeOk((args[0] as any)?.tag === "Failure")
-        : makeFailure("is-error? expects 1 argument") :
-
 makeFailure(`Bad primitive op: ${format(proc.op)}`);
 
 

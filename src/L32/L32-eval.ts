@@ -146,27 +146,6 @@ export const evalParse = (s: string): Result<Value> =>
     bind(p(s), (sexp: Sexp) => 
         bind(parseL32Exp(sexp), (exp: Exp) =>
             evalSequence([exp], makeEmptyEnv())));
-// =====================
-// Bind primitive (משמש את הבדיקה bind v (lambda ...))
-export const bindPrim = (args: Value[]): Result<Value> => {
-    if (args.length !== 2) {
-        return makeFailure("bind expects two arguments");
-    }
-
-    const [firstVal, secondVal] = args;
-
-    // אם הראשון הוא Failure – מחזירים אותו
-    if ((firstVal as any)?.tag === "Failure") {
-        return makeFailure((firstVal as any).message ?? "Unknown error");
-    }
-
-    // אם השני הוא Closure – ממשים אותו על הערך
-    if (isClosure(secondVal)) {
-        return L32applyProcedure(secondVal, [firstVal], makeEmptyEnv());
-    }
-
-    return makeFailure("bind expects a value and a lambda closure");
-};
 
 const evalDictExp = (exp: DictExp, env: Env): Result<Value> => {
     // Start with empty list

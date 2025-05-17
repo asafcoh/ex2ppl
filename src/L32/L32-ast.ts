@@ -125,7 +125,7 @@ export const isAtomicExp = (x: any): x is AtomicExp =>
     isNumExp(x) || isBoolExp(x) || isStrExp(x) ||
     isPrimOp(x) || isVarRef(x);
 export const isCompoundExp = (x: any): x is CompoundExp =>
-    isAppExp(x) || isIfExp(x) || isProcExp(x) || isLitExp(x) || isLetExp(x) || isDictExp(x);
+    isAppExp(x) || isIfExp(x) || isProcExp(x) || isLitExp(x) || isDictExp(x) || isLetExp(x);
 export const isCExp = (x: any): x is CExp =>
     isAtomicExp(x) || isCompoundExp(x);
 
@@ -176,7 +176,7 @@ export const parseL32SpecialForm = (op: Sexp, params: Sexp[]): Result<CExp> =>
     op === "quote" ? 
         isNonEmptyList<Sexp>(params) ? parseLitExp(first(params)) :
         makeFailure(`Bad quote exp: ${params}`) :
-        op === "dict" ?
+    op === "dict" ?
         isNonEmptyList<Sexp>(params) ? parseDictExp(params) :
         makeFailure(`Bad dict expression: ${params}`) :
     makeFailure("Never");
