@@ -235,15 +235,34 @@ const convertCExpToQuotedSExp = (exp: L32CExp): L3SExpValue => {
         return makeL3SymbolSExp(exp.op);
     }
     if (isDictExp(exp)) {
-        const converted = convertSExp(exp.pairs); // המרה מ-L32 ל-L3
+        const convertPair = (pair: L32CompoundSExp): L3SExpValue => {
+            const key = isL32SymbolSExp(pair.val1)
+                ? makeL3SymbolSExp(pair.val1.val)
+                : convertCExpToQuotedSExp(pair.val1 as L32CExp);
+    
+            const val = convertCExpToQuotedSExp(pair.val2 as L32CExp);
+            return makeL3CompoundSExp(key, makeL3CompoundSExp(val, makeL3EmptySExp()));
+        };
+    
+        const convertPairsList = (pairs: L32CompoundSExp | L32EmptySExp): L3SExpValue[] => {
+            if (isL32EmptySExp(pairs)) return [];
+            const current = convertPair(pairs.val1 as L32CompoundSExp);
+            const rest = convertPairsList(pairs.val2 as L32CompoundSExp | L32EmptySExp);
+            return [current, ...rest];
+        };
+    
+        const dictItems = convertPairsList(exp.pairs);
         return listToCompoundSExp([
             makeL3SymbolSExp("dict"),
-            ...convertSExpToList(converted)
+            ...dictItems
         ]);
     }
 
     return makeL3SymbolSExp("unsupported");
 };
+
+
+
 export const convertSExpToList = (sexp: L3SExpValue): L3SExpValue[] => {
     const list: L3SExpValue[] = [];
     let curr = sexp;
