@@ -7,7 +7,7 @@ import { append } from 'ramda';
 
 export type DictValue = {
     tag: "DictValue";
-    map: { [key: string]: Value };
+    pairs: CompoundSExp | EmptySExp;  // Changed from map object to linked list
 };
 
 export type Value = SExpValue | DictValue;
@@ -81,15 +81,28 @@ export const isSymbolSExp = (x: any): x is SymbolSExp => x.tag === "SymbolSExp";
 // ===========================================
 // Dict
 
-export const makeDictValue = (map: { [key: string]: Value }): DictValue =>
-    ({ tag: "DictValue", map });
+export const makeDictValue = (pairs: CompoundSExp | EmptySExp): DictValue =>
+    ({ tag: "DictValue", pairs });
+
+export const makeDictValueFromEntries = (entries: [string, Value][]): DictValue => {
+    let pairs: CompoundSExp | EmptySExp = makeEmptySExp();
+    
+    // Build the linked list in reverse (so the first entries are accessed first)
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const [key, val] = entries[i];
+        const keySymbol = makeSymbolSExp(key);
+        const pair = makeCompoundSExp(keySymbol, val as SExpValue);
+        pairs = makeCompoundSExp(pair, pairs);
+    }
+    
+    return makeDictValue(pairs);
+};
 
 export const isDictValue = (val: any): val is DictValue =>
     val !== null &&
     typeof val === "object" &&
     val.tag === "DictValue" &&
-    typeof val.map === "object" &&
-    val.map !== null;
+    (isCompoundSExp(val.pairs) || isEmptySExp(val.pairs));
 
 // ===========================================
 // Printable form for values
@@ -115,10 +128,24 @@ export const compoundSExpToString = (
         ? `(${css.join(' ')})`
         : `(${css.s1.join(' ')} . ${css.s2})`;
 
-const dictToString = (dict: DictValue): string =>
-    `#dict(${Object.entries(dict.map)
-        .map(([k, v]) => `(${k} ${valueToString(v)})`)
-        .join(' ')})`;
+const dictToString = (dict: DictValue): string => {
+    const pairsToString = (pairs: CompoundSExp | EmptySExp): string[] => {
+        if (isEmptySExp(pairs)) {
+            return [];
+        } else if (isCompoundSExp(pairs)) {
+            const currentPair = pairs.val1;
+            if (isCompoundSExp(currentPair) && isSymbolSExp(currentPair.val1)) {
+                const key = currentPair.val1.val;
+                const val = valueToString(currentPair.val2);
+                return [`(${key} ${val})`, ...pairsToString(pairs.val2 as CompoundSExp | EmptySExp)];
+            }
+            return pairsToString(pairs.val2 as CompoundSExp | EmptySExp);
+        }
+        return [];
+    };
+    
+    return `#dict(${pairsToString(dict.pairs).join(' ')})`;
+};
 
 export const valueToString = (val: Value): string =>
     isNumber(val)

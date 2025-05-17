@@ -6,7 +6,7 @@ import {
     isSymbolSExp,
     makeCompoundSExp,
     makeEmptySExp,
-    makeDictValue,      // ← הוספתי את זה
+    makeDictValue,
     CompoundSExp,
     EmptySExp,
     Value,
@@ -18,7 +18,8 @@ import { List, allT, first, isNonEmptyList, rest } from '../shared/list';
 import { isBoolean, isNumber, isString } from "../shared/type-predicates";
 import { Result, makeOk, makeFailure } from "../shared/result";
 import { format } from "../shared/format";
-import { bindPrim } from "./L32-eval"; // ⬅️ ייבוא חשוב!
+import { DictValue, SymbolSExp } from "./L32-value";
+import { bindPrim, dictLookup } from "./L32-eval"; // ⬅️ ייבוא חשוב!
 
 
 
@@ -51,21 +52,19 @@ export const applyPrimitive = (proc: PrimOp, args: Value[]): Result<Value> =>
 
     // === תוספות עבור Q23/Q24 ===
     proc.op === "dict" ? 
-    makeOk(makeDictValue({})) :
+    makeOk(makeDictValue(makeEmptySExp())) :
 
     proc.op === "get" ?
     args.length === 2 && isDictValue(args[0]) && isSymbolSExp(args[1])
-      ? args[0].map.hasOwnProperty(args[1].val)
-         ? makeOk(args[0].map[args[1].val])
-         : makeFailure(`Key '${args[1].val}' not found`)
-      : makeFailure("get expects a dict and a symbol") :
+        ? dictLookup(args[0].pairs, args[1])
+        : makeFailure("get expects a dict and a symbol") :
 
-   proc.op === "bind" ?
-   args.length === 2
-    ? bindPrim(args) // ✅ bind של Result ו-lambda
-    : args.length === 3 && isDictValue(args[0]) && isSymbolSExp(args[1])
-        ? makeOk(makeDictValue({ ...args[0].map, [args[1].val]: args[2] }))
-        : makeFailure("bind expects either (Result, lambda) or (dict, symbol, value)") :
+    proc.op === "bind" ?
+    args.length === 3 && isDictValue(args[0]) && isSymbolSExp(args[1])
+        ? dictBind(args[0], args[1], args[2])
+        : args.length === 2
+            ? bindPrim(args)
+            : makeFailure("bind expects either (Result, lambda) or (dict, symbol, value)") :
 
     proc.op === "dict?" ?
     args.length === 1
@@ -135,5 +134,13 @@ const buildSExpList = (vals: List<SExpValue>): CompoundSExp | EmptySExp =>
     isNonEmptyList(vals)
         ? makeCompoundSExp(first(vals) as SExpValue, buildSExpList(rest(vals) as List<SExpValue>))
         : makeEmptySExp();
+
+const dictBind = (dict: DictValue, key: SymbolSExp, val: Value): Result<DictValue> => {
+    // Create new pair
+    const newPair = makeCompoundSExp(key, val as SExpValue);
+    // Add to front of list (this will shadow any existing entries with same key)
+    const newPairs = makeCompoundSExp(newPair, dict.pairs);
+    return makeOk(makeDictValue(newPairs));
+};
 
 

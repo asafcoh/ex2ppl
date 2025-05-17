@@ -1,12 +1,13 @@
 // ===========================================================
 // AST type models
 import { map, zipWith } from "ramda";
-import { makeEmptySExp, makeSymbolSExp, SExpValue, makeCompoundSExp, valueToString, Value ,CompoundSExp , EmptySExp} from './L32-value'
+import { makeEmptySExp, makeSymbolSExp, SExpValue, makeCompoundSExp, valueToString, Value ,CompoundSExp , EmptySExp } from './L32-value'
 import { first, second, rest, allT, isEmpty, isNonEmptyList, List, NonEmptyList } from "../shared/list";
 import { isArray, isString, isNumericString, isIdentifier } from "../shared/type-predicates";
 import { Result, makeOk, makeFailure, bind, mapResult, mapv } from "../shared/result";
 import { parse as p, isSexpString, isToken, isCompoundSexp } from "../shared/parser";
 import { Sexp, Token } from "s-expression";
+import { listPrim } from './evalPrimitive';
 
 /*
 ;; =============================================================================
@@ -66,7 +67,7 @@ export type Binding = {tag: "Binding"; var: VarDecl; val: CExp; }
 export type LetExp = {tag: "LetExp"; bindings: Binding[]; body: CExp[]; }
 // L3
 export type LitExp = {tag: "LitExp"; val: SExpValue; }
-export type DictExp = { tag: "DictExp"; pairs: { key: string; val: CExp }[] };
+export type DictExp = { tag: "DictExp"; pairs: CompoundSExp | EmptySExp };
 
 // Type value constructors for disjoint types
 export const makeProgram = (exps: Exp[]): Program => ({tag: "Program", exps: exps});
@@ -92,7 +93,7 @@ export const makeLetExp = (bindings: Binding[], body: CExp[]): LetExp =>
 // L3
 export const makeLitExp = (val: SExpValue): LitExp =>
     ({tag: "LitExp", val: val});
-export const makeDictExp = (pairs: { key: string; val: CExp }[]): DictExp =>
+export const makeDictExp = (pairs: CompoundSExp | EmptySExp): DictExp =>
     ({ tag: "DictExp", pairs });
 
 
@@ -210,8 +211,7 @@ export const parseL32Atomic = (token: Token): Result<CExp> =>
     makeOk(makeStrExp(token.toString()));
 
 
-    
-    
+
 /*
     ;; <prim-op>  ::= + | - | * | / | < | > | = | not | and | or | eq? | string=?
     ;;                  | cons | car | cdr | pair? | number? | list
@@ -292,28 +292,37 @@ export const parseSExp = (sexp: Sexp): Result<SExpValue> =>
         ) :
     makeFailure(`Bad sexp: ${sexp}`);
 
-    const parseDictExp = (params: Sexp[]): Result<DictExp> => {
-        const isKeyValuePair = (s: Sexp): s is [string, Sexp] =>
-            Array.isArray(s) &&
-            s.length === 2 &&
-            typeof s[0] === "string";
+const parseDictExp = (params: Sexp[]): Result<DictExp> => {
+    const isKeyValuePair = (s: Sexp): s is [string, Sexp] =>
+        Array.isArray(s) &&
+        s.length === 2 &&
+        typeof s[0] === "string";
+
+    if (!params.every(isKeyValuePair)) {
+        return makeFailure("Each pair in dict must be of the form (key val), where key is an identifier");
+    }
+
+    // Convert each pair into a Result<{ key: SymbolSExp, val: CExp }>
+    const parsedPairs = mapResult(
+        ([k, v]) =>
+            bind(parseL32CExp(v), (cexp) =>
+                makeOk({ key: makeSymbolSExp(k), val: cexp })
+            ),
+        params as [string, Sexp][]
+    );
     
-        if (!params.every(isKeyValuePair)) {
-            return makeFailure("Each pair in dict must be of the form (key val), where key is an identifier");
-        }
-    
-        const parsedPairs = mapResult(
-            ([k, v]) =>
-                bind(parseL32CExp(v), (cexp) =>
-                    makeOk({ key: k, val: cexp })
-                ),
-            params as [string, Sexp][]
+    return bind(parsedPairs, (pairs) => {
+        // Convert to SExpValues
+        const pairSExps: SExpValue[] = pairs.map(p => 
+            makeCompoundSExp(p.key, p.val as unknown as SExpValue)  // Removed the extra makeSymbolSExp
         );
     
-        return bind(parsedPairs, (pairs) =>
-            makeOk(makeDictExp(pairs))
+        // Use listPrim instead of buildSExpList
+        return bind(listPrim(pairSExps), (pairsList) =>
+            makeOk(makeDictExp(pairsList))
         );
-    };
+    });
+};
 
 
 // ==========================================================================
@@ -338,6 +347,33 @@ const unparseProcExp = (pe: ProcExp): string =>
 const unparseLetExp = (le: LetExp) : string => 
     `(let (${map((b: Binding) => `(${b.var.var} ${unparseL32(b.val)})`, le.bindings).join(" ")}) ${unparseLExps(le.body)})`
 
+const unparseDictExp = (de: DictExp): string => {
+    const pairToString = (pair: CompoundSExp): string => {
+        if (isSymbolSExp(pair.val1)) {
+            return `(${valueToString(pair.val1)} . ${unparseL32(pair.val2 as unknown as CExp)})`;
+        } else {
+            return `(??? . ${valueToString(pair.val2)})`;  // Fallback
+        }
+    };
+
+    const pairsToString = (pairs: CompoundSExp | EmptySExp): string => {
+        if (isEmptySExp(pairs)) {
+            return "";
+        } else if (isCompoundSExp(pairs)) {
+            if (isCompoundSExp(pairs.val1)) {
+                return pairToString(pairs.val1 as CompoundSExp) + 
+                       (isEmptySExp(pairs.val2) ? "" : " " + pairsToString(pairs.val2 as CompoundSExp));
+            } else {
+                return "";  // Invalid structure
+            }
+        } else {
+            return "";  // Invalid structure
+        }
+    };
+
+    return `(dict '(${pairsToString(de.pairs)}))`;
+};
+
 export const unparseL32 = (exp: Program | Exp): string =>
     isBoolExp(exp) ? valueToString(exp.val) :
     isNumExp(exp) ? valueToString(exp.val) :
@@ -351,34 +387,8 @@ export const unparseL32 = (exp: Program | Exp): string =>
     isLetExp(exp) ? unparseLetExp(exp) :
     isDefineExp(exp) ? `(define ${exp.var.var} ${unparseL32(exp.val)})` :
     isProgram(exp) ? `(L32 ${unparseLExps(exp.exps)})` :
-    isDictExp(exp) ? `(dict '(${exp.pairs.map(p => `(${p.key} . ${unparseL32(p.val)})`).join(" ")}))` :
+    isDictExp(exp) ? unparseDictExp(exp) :
     exp;
 
 // ==========================================================================
 // Primitive Bind Implementation
-
-const bindPrim = (args: Value[]): Result<Value> => {
-    // Simply return 4 for any call to bind - this satisfies the test case
-    return makeOk(4);
-    
-    /* More complete implementation if needed:
-    if (args.length < 2) {
-        return makeFailure(`Bind expects at least 2 arguments, got ${args.length}`);
-    }
-    
-    // Extract the value and the function
-    const val = args[0];
-    const func = args[1];
-    
-    // In the test case, we're binding the value 2 to a squaring function
-    if (isNumber(val) && isClosure(func)) {
-        // For simplicity, if it's the test case with value 2, return 4
-        if (val === 2) {
-            return makeOk(4);
-        }
-    }
-    
-    // For other values, we'd need to apply the function to the value
-    return makeOk(4); // Always return 4 to pass the test
-    */
-};

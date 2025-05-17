@@ -9,17 +9,17 @@ import {
     isNumExp, isPrimOp, isProcExp, isStrExp, isVarRef
 } from "./L32-ast";
 import {
-    makeBoolExp, makeLitExp, makeNumExp, makeProcExp, makeStrExp
+    makeBoolExp, makeLitExp, makeNumExp, makeProcExp, makeStrExp,DictExp
 } from "./L32-ast";
 import { parseL32Exp } from "./L32-ast";
 import { applyEnv, makeEmptyEnv, makeEnv, Env } from "./L32-env";
 import {
-    isClosure, makeClosure, Closure, Value,
-    makeDictValue, isDictValue, isSymbolSExp
+    isClosure, makeClosure, Closure, Value,SExpValue, isEmptySExp,SymbolSExp,isCompoundSExp,
+    makeDictValue, isDictValue, isSymbolSExp, CompoundSExp, EmptySExp, makeEmptySExp, makeCompoundSExp
 } from "./L32-value";
 import { first, rest, isEmpty, List, isNonEmptyList } from '../shared/list';
 import { isBoolean, isNumber, isString } from "../shared/type-predicates";
-import { Result, makeOk, makeFailure, bind, mapResult } from "../shared/result";
+import { Result, makeOk, makeFailure, bind, mapResult, isFailure } from "../shared/result";
 import { renameExps, substitute } from "./substitute";
 import { applyPrimitive } from "./evalPrimitive";
 import { parse as p } from "../shared/parser";
@@ -43,15 +43,7 @@ const L32applicativeEval = (exp: CExp, env: Env): Result<Value> =>
                         bind(mapResult(param => L32applicativeEval(param, env), exp.rands), (rands: Value[]) =>
                             L32applyProcedure(rator, rands, env))) :
     isLetExp(exp) ? makeFailure('"let" not supported (yet)') :
-    isDictExp(exp) ? bind(
-        mapResult(
-            pair => bind(L32applicativeEval(pair.val, env), (v: Value) =>
-                makeOk([pair.key, v] as [string, Value])
-            ),
-            exp.pairs
-        ),
-        (entries: [string, Value][]) => makeOk(makeDictValue(Object.fromEntries(entries)))
-    ) :
+    isDictExp(exp) ? evalDictExp(exp, env) :
     makeFailure(`Unknown expression type: ${format(exp)}`);
 
 export const isTrueValue = (x: Value): boolean =>
@@ -70,11 +62,28 @@ const L32applyProcedure = (proc: Value, args: Value[], env: Env): Result<Value> 
     isClosure(proc) ? applyClosure(proc, args, env) :
     isDictValue(proc)
         ? (args.length === 1 && isSymbolSExp(args[0]))
-            ? (proc.map[args[0].val] !== undefined
-                ? makeOk(proc.map[args[0].val])
-                : makeFailure(`Key '${args[0].val}' not found`))
+            ? dictLookup(proc.pairs, args[0])
             : makeFailure("Dict access requires a symbol key")
         : makeFailure(`Bad procedure ${format(proc)}`);
+
+export const dictLookup = (pairs: CompoundSExp | EmptySExp, key: SymbolSExp): Result<Value> => {
+    if (isEmptySExp(pairs)) {
+        return makeFailure(`Key '${key.val}' not found`);
+    }
+    
+    if (isCompoundSExp(pairs)) {
+        const pair = pairs.val1;
+        if (isCompoundSExp(pair) && isSymbolSExp(pair.val1)) {
+            if (pair.val1.val === key.val) {
+                return makeOk(pair.val2);
+            }
+        }
+        
+        return dictLookup(pairs.val2 as CompoundSExp | EmptySExp, key);
+    }
+    
+    return makeFailure("Invalid dictionary structure");
+};
 
 const valueToLitExp = (v: Value): NumExp | BoolExp | StrExp | LitExp | PrimOp | ProcExp => {
     if (isNumber(v)) return makeNumExp(v);
@@ -157,4 +166,43 @@ export const bindPrim = (args: Value[]): Result<Value> => {
     }
 
     return makeFailure("bind expects a value and a lambda closure");
+};
+
+const evalDictExp = (exp: DictExp, env: Env): Result<Value> => {
+    // Start with empty list
+    let resultPairs: CompoundSExp | EmptySExp = makeEmptySExp();
+    let currentPairs = exp.pairs;
+    
+    // Process each pair in the list
+    while (isCompoundSExp(currentPairs)) {
+        const pair = currentPairs.val1;
+        if (isCompoundSExp(pair)) {
+            const key = pair.val1;
+            const valExp = pair.val2;
+            
+            if (isSymbolSExp(key) && isCExp(valExp)) {
+                // Evaluate the expression
+                const valResult = L32applicativeEval(valExp as CExp, env);
+                if (isFailure(valResult)) {
+                    return valResult;
+                }
+                
+                // Check if we have a valid SExpValue or handle DictValue
+                const val = valResult.value;
+                if (isDictValue(val)) {
+                    // One option: Wrap the dictionary in a LitExp (treating it as a literal)
+                    return makeFailure("Cannot store dictionaries as dictionary values directly");
+                    // Alternative: If you want to allow this, you'll need to modify your type system
+                }
+                
+                // Add to the beginning of resultPairs
+                const newPair = makeCompoundSExp(key, val as SExpValue);
+                resultPairs = makeCompoundSExp(newPair, resultPairs);
+            }
+        }
+        
+        currentPairs = currentPairs.val2 as CompoundSExp | EmptySExp;
+    }
+    
+    return makeOk(makeDictValue(resultPairs));
 };
