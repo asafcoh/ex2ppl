@@ -1,131 +1,235 @@
-// Abstract Syntax Tree (AST)
-import {
-    Program, Exp, CExp, Binding, DictExp,
-    isDefineExp, isCExp, isNumExp, isBoolExp, isStrExp, isPrimOp,
-    isVarRef, isAppExp, isIfExp, isProcExp, isLitExp, isLetExp, isDictExp,
-    makeProgram, makeDefineExp, makeAppExp, makeIfExp,
-    makeProcExp, makeLetExp, makeBinding, makeVarDecl,
-    makeLitExp, makeVarRef
+import { 
+    AppExp, CExp, Exp, LitExp, makeAppExp, makeLitExp, makeProgram, 
+    makeVarRef, Program, makeProcExp, makeBinding, makeLetExp,
+    makeIfExp, makeDefineExp, makeVarDecl, makeBoolExp
+} from './L3/L3-ast';
+import { 
+    DictExp, isAppExp, isBoolExp, isDefineExp, isDictExp, isIfExp, 
+    isLetExp, isLitExp, isNumExp, isPrimOp, isProcExp, isStrExp, 
+    isVarRef, Binding 
 } from './L32/L32-ast';
-
-// S-Expression Values
+import { 
+    CompoundSExp as L32CompoundSExp, 
+    EmptySExp as L32EmptySExp,
+    SymbolSExp as L32SymbolSExp,
+    SExpValue as L32SExpValue,
+    isCompoundSExp as isL32CompoundSExp,
+    isEmptySExp as isL32EmptySExp,
+    isSymbolSExp as isL32SymbolSExp
+} from './L32/L32-value';
 import {
-    isEmptySExp, isCompoundSExp, isSymbolSExp,
-    makeEmptySExp, makeCompoundSExp, makeSymbolSExp,SExpValue
-} from "./L3/L3-value";
+    SExpValue as L3SExpValue, makeCompoundSExp as makeL3CompoundSExp,
+    makeEmptySExp as makeL3EmptySExp, makeSymbolSExp as makeL3SymbolSExp
+} from './L3/L3-value';
 
-import { map } from 'ramda';
-
-/*
- * === Part A ===
- * Dict2App: convert only DictExp → AppExp(dict '((a . v1) ...))
+/**
+ * Dict2App - Transforms an L32 program by converting each DictExp into
+ * an AppExp with a "dict" operator and a quoted list of pairs
+ *
+ * @param program - The L32 program to transform
+ * @returns - An L3 program with dictionaries converted to applications
  */
-export const Dict2App = (exp: CExp): CExp =>
-    isDictExp(exp) ? dictToApp(exp) :
-    isIfExp(exp) ? makeIfExp(Dict2App(exp.test), Dict2App(exp.then), Dict2App(exp.alt)) :
-    isAppExp(exp) ? makeAppExp(Dict2App(exp.rator), map(Dict2App, exp.rands)) :
-    isProcExp(exp) ? makeProcExp(exp.args, map(Dict2App, exp.body)) :
-    isLetExp(exp) ? makeLetExp(
-        map((b: Binding) => makeBinding(b.var.var, Dict2App(b.val)), exp.bindings),
-        map(Dict2App, exp.body)) :
-    exp;
-
-/*
- * === Helper: convert CExp → SExpValue with quote wrapping ===
- */
-const convertSExpValue = (val: any): SExpValue => {
-    if (typeof val === "number" || typeof val === "boolean" || typeof val === "string") {
-        return val;
-    }
-    if (isSymbolSExp(val)) return makeSymbolSExp(val.val);
-    if (isEmptySExp(val)) return makeEmptySExp();
-    if (isCompoundSExp(val)) {
-        return makeCompoundSExp(
-            convertSExpValue(val.val1),
-            convertSExpValue(val.val2)
-        );
-    }
-    // כאמצעי מנע – נחזיר סימבול של שגיאה
-    return makeSymbolSExp("unsupported");
+export const Dict2App = (program: Program): Program => {
+    const transformedExps = program.exps.map(transformExp);
+    return makeProgram(transformedExps);
 };
 
-const convertCExpToSExp = (e: CExp): SExpValue => {
-    if (isNumExp(e)) return e.val;
-    if (isBoolExp(e)) return e.val;
-    if (isStrExp(e)) return e.val;
-    if (isVarRef(e)) return makeSymbolSExp(e.var);
-    if (isPrimOp(e)) return makeSymbolSExp(e.op);
-    if (isLitExp(e)) return convertSExpValue(e.val);
-
-
-    if (isProcExp(e))
-        return makeCompoundSExp(
-            makeSymbolSExp("lambda"),
-            makeCompoundSExp(
-                makeListCompound(e.args.map(a => makeSymbolSExp(a.var))),
-                makeListCompound(e.body.map(convertCExpToSExp))
-            )
-        );
-
-    if (isAppExp(e))
-        return makeCompoundSExp(
-            convertCExpToSExp(e.rator),
-            makeListCompound(e.rands.map(convertCExpToSExp))
-        );
-
-    return makeSymbolSExp("unsupported");
+/**
+ * L32ToL3 - Transform an L32 program to an equivalent L3 program where
+ * dictionaries can be applied directly to keys
+ * 
+ * @param program - The L32 program to transform
+ * @returns - An L3 program with equivalent dictionary functionality
+ */
+export const L32ToL3 = (program: Program): Program => {
+    // First transform all dictionary expressions
+    const transformedExps = program.exps.map(transformExp);
+    
+    // Create dictionary implementation function
+    const dictDefine = createDictImplementation();
+    
+    // Return program with dict implementation and transformed expressions
+    return makeProgram([dictDefine, ...transformedExps]);
 };
 
-const cexpToQuotedSExp = (cexp: CExp): SExpValue =>
-    makeCompoundSExp(makeSymbolSExp("quote"), convertCExpToSExp(cexp));
-
-const makeListCompound = (xs: SExpValue[]): SExpValue =>
-    xs.length === 0 ? makeEmptySExp() : makeCompoundSExp(xs[0], makeListCompound(xs.slice(1)));
-
-const dictToApp = (dict: DictExp): CExp => {
-    const pairList = dict.pairs.map(pair =>
-        makeCompoundSExp(
-            makeSymbolSExp(pair.key),   // keys must be symbols
-            cexpToQuotedSExp(pair.val)  // values must be quoted
-        )
+/**
+ * Create the dictionary implementation function
+ * 
+ * Equivalent to:
+ * (define dict
+ *   (lambda (pairs)
+ *     (lambda (key)
+ *       (letrec ((lookup
+ *                  (lambda (p)
+ *                    (if (null? p) 
+ *                        #f
+ *                        (if (eq? (caar p) key)
+ *                            (cdar p)
+ *                            (lookup (cdr p)))))))
+ *         (lookup pairs)))))
+ */
+const createDictImplementation = (): Exp => {
+    // Parameters
+    const pairsParam = makeVarDecl("pairs");
+    const keyParam = makeVarDecl("key");
+    const lookupPairsParam = makeVarDecl("p");
+    
+    // Inner function body: checks if current pair's key matches
+    const checkCurrentPair = makeIfExp(
+        // Test: (eq? (caar p) key)
+        makeAppExp(
+            makeVarRef("eq?"),
+            [
+                makeAppExp(makeVarRef("car"), [makeAppExp(makeVarRef("car"), [makeVarRef("p")])]),
+                makeVarRef("key")
+            ]
+        ),
+        // Then: (cdar p) - return the value
+        makeAppExp(makeVarRef("cdr"), [makeAppExp(makeVarRef("car"), [makeVarRef("p")])]),
+        // Else: (lookup (cdr p)) - recursive call with rest of list
+        makeAppExp(makeVarRef("lookup"), [makeAppExp(makeVarRef("cdr"), [makeVarRef("p")])])
     );
 
-    return makeAppExp(
-        makeVarRef("dict"),
-        [makeLitExp(makeListCompound(pairList))]
+    // Lookup function body: checks if list is empty first
+    const lookupBody = makeIfExp(
+        // Test: (null? p)
+        makeAppExp(makeVarRef("null?"), [makeVarRef("p")]),
+        // Then: #f - return false if key not found
+        makeBoolExp(false),
+        // Else: Check the current pair
+        checkCurrentPair
     );
+
+    // Define the lookup function
+    const lookupFunction = makeProcExp([lookupPairsParam], [lookupBody]);
+    
+    // Create the binding for lookup in letrec
+    const lookupBinding = makeBinding("lookup", lookupFunction);
+    
+    // Inner lambda body: (letrec ((lookup ...)) (lookup pairs))
+    const innerLambdaBody = makeLetExp(
+        [lookupBinding], 
+        [makeAppExp(makeVarRef("lookup"), [makeVarRef("pairs")])]
+    );
+    
+    // Inner lambda: (lambda (key) ...)
+    const innerLambda = makeProcExp([keyParam], [innerLambdaBody]);
+    
+    // Outer lambda: (lambda (pairs) (lambda (key) ...))
+    const outerLambda = makeProcExp([pairsParam], [innerLambda]);
+    
+    // Define expression: (define dict (lambda (pairs) ...))
+    return makeDefineExp(makeVarDecl("dict"), outerLambda);
 };
 
-/*
- * === Part B ===
- * L32toL3: converts full program, including dict access (get ...)
+// Transform any expression (Exp)
+const transformExp = (exp: Exp): Exp => {
+    if (isDefineExp(exp)) {
+        return {
+            tag: "DefineExp",
+            var: exp.var,
+            val: transformCExp(exp.val)
+        };
+    } else {
+        return transformCExp(exp);
+    }
+};
+
+// Transform a CExp
+const transformCExp = (exp: CExp): CExp => {
+    if (isNumExp(exp) || isBoolExp(exp) || isStrExp(exp) || isPrimOp(exp) || isVarRef(exp)) {
+        return exp; // Atomic expressions remain unchanged
+    } else if (isAppExp(exp)) {
+        return {
+            tag: "AppExp",
+            rator: transformCExp(exp.rator),
+            rands: exp.rands.map(transformCExp)
+        };
+    } else if (isIfExp(exp)) {
+        return {
+            tag: "IfExp",
+            test: transformCExp(exp.test),
+            then: transformCExp(exp.then),
+            alt: transformCExp(exp.alt)
+        };
+    } else if (isProcExp(exp)) {
+        return {
+            tag: "ProcExp",
+            args: exp.args,
+            body: exp.body.map(transformCExp)
+        };
+    } else if (isLetExp(exp)) {
+        return {
+            tag: "LetExp",
+            bindings: exp.bindings.map(b => ({
+                tag: "Binding",
+                var: b.var,
+                val: transformCExp(b.val)
+            })),
+            body: exp.body.map(transformCExp)
+        };
+    } else if (isLitExp(exp)) {
+        return exp; // LitExp remains unchanged
+    } else if (isDictExp(exp)) {
+        return transformDictExp(exp);
+    } else {
+        return exp; // Fallback
+    }
+};
+
+/**
+ * Convert L32 SExpValue to L3 SExpValue for compatibility
  */
-const L32CExpToL3 = (e: CExp): CExp =>
-    isNumExp(e) ? e :
-    isBoolExp(e) ? e :
-    isStrExp(e) ? e :
-    isPrimOp(e) ? e :
-    isVarRef(e) ? e :
-    isLitExp(e) ? e :
-    isIfExp(e) ? makeIfExp(
-        L32CExpToL3(e.test),
-        L32CExpToL3(e.then),
-        L32CExpToL3(e.alt)) :
-    isAppExp(e)
-        ? isDictExp(e.rator) && e.rands.length === 1
-            ? makeAppExp(makeVarRef("get"), [dictToApp(e.rator), L32CExpToL3(e.rands[0])])
-            : makeAppExp(L32CExpToL3(e.rator), map(L32CExpToL3, e.rands)) :
-    isProcExp(e) ? makeProcExp(e.args, map(L32CExpToL3, e.body)) :
-    isLetExp(e) ? makeLetExp(
-        map((b: Binding) => makeBinding(b.var.var, L32CExpToL3(b.val)), e.bindings),
-        map(L32CExpToL3, e.body)) :
-    isDictExp(e) ? dictToApp(e) :
-    e;
+const convertSExp = (sexp: L32CompoundSExp | L32EmptySExp): L3SExpValue => {
+    if (isL32EmptySExp(sexp)) {
+        return makeL3EmptySExp();
+    } 
+    
+    if (isL32CompoundSExp(sexp)) {
+        // Convert val1
+        let val1: L3SExpValue;
+        if (isL32SymbolSExp(sexp.val1)) {
+            val1 = makeL3SymbolSExp(sexp.val1.val);
+        } else if (isL32CompoundSExp(sexp.val1)) {
+            val1 = convertSExp(sexp.val1);
+        } else if (isL32EmptySExp(sexp.val1)) {
+            val1 = makeL3EmptySExp();
+        } else {
+            // For primitives like number, string, boolean
+            val1 = sexp.val1 as any;
+        }
+        
+        // Convert val2
+        let val2: L3SExpValue;
+        if (isL32SymbolSExp(sexp.val2)) {
+            val2 = makeL3SymbolSExp(sexp.val2.val);
+        } else if (isL32CompoundSExp(sexp.val2)) {
+            val2 = convertSExp(sexp.val2);
+        } else if (isL32EmptySExp(sexp.val2)) {
+            val2 = makeL3EmptySExp();
+        } else {
+            // For primitives like number, string, boolean
+            val2 = sexp.val2 as any;
+        }
+        
+        return makeL3CompoundSExp(val1, val2);
+    }
+    
+    // This shouldn't happen since we're only passing CompoundSExp or EmptySExp
+    throw new Error("Unexpected SExp type");
+};
 
-const L32ExpToL3 = (exp: Exp): Exp =>
-    isDefineExp(exp) ? makeDefineExp(exp.var, L32CExpToL3(exp.val)) :
-    isCExp(exp) ? L32CExpToL3(exp) :
-    exp;
-
-export const L32toL3 = (prog: Program): Program =>
-    makeProgram(map(L32ExpToL3, prog.exps));
+// Transform a DictExp to an AppExp
+const transformDictExp = (dictExp: DictExp): AppExp => {
+    // Create a VarRef to 'dict'
+    const dictRef = makeVarRef("dict");
+    
+    // Convert L32 pairs to L3 SExpValue
+    const convertedPairs = convertSExp(dictExp.pairs);
+    
+    // Create a LitExp with the converted pairs
+    const pairsLitExp = makeLitExp(convertedPairs);
+    
+    // Create an AppExp with the dictRef as operator and pairsLitExp as the only operand
+    return makeAppExp(dictRef, [pairsLitExp]);
+};
