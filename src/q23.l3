@@ -1,37 +1,41 @@
-(define dict 
-  (lambda (pairs) 
-    pairs))
+(define make-error
+  (lambda (x)
+    (cons 'error (list x))))
 
-(define dict?
-  (lambda (val)
-    (if (eq? val '())
-        #t
-        (if (and (pair? (car val))
-                 (symbol? (car (car val)))
-                 (not (pair? (cdr (car val)))))
-            (dict? (cdr val))
-            #f))))
-
-(define make-error 
-  (lambda (msg) 
-    (list 'error msg)))
-
-(define is-error? 
-  (lambda (val) 
-    (and (pair? val) (eq? (car val) 'error))))
-
-(define get
-  (lambda (d k)
-    (if (or (not (pair? d)) (eq? d '()))
-        (make-error "key not found")
-        (if (and (pair? (car d))
-                 (eq? (car (car d)) k))
-            (cdr (car d))
-            (get (cdr d) k)))))
+(define is-error?
+  (lambda (x)
+    (if (pair? x)
+        (eq? (car x) 'error)
+        #f)))
 
 (define bind
-  (lambda (val f)
-    (if (is-error? val)
-        val
-        (f val))))
+  (lambda (x y)
+    (if (is-error? x)
+        x
+        (y x))))
 
+(define dict
+  (lambda (pairs)
+    (if (pair? pairs)
+        (cons 'dict pairs)
+        (make-error pairs))))
+
+(define dict?
+  (lambda (x)
+    (if (pair? x)
+        (eq? (car x) 'dict)
+        #f)))
+
+(define get-loop
+  (lambda (key value)
+    (if (not (pair? key))
+        (make-error value)
+        (if (and (pair? (car key)) (eq? (car (car key)) value))
+            (cdr (car key))
+            (get-loop (cdr key) value)))))
+
+(define get
+  (lambda (key value)
+    (if (not (dict? key))
+        (make-error key)
+        (get-loop (cdr key) value))))
